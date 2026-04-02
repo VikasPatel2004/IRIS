@@ -7,7 +7,7 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
-app.use(express.static(__dirname));
+app.use(express.static(path.join(__dirname, "dist")));
 
 // ---------------- FIRMS LOAD ----------------
 const FIRMS_DIR = path.join(__dirname, "firms_data");
@@ -100,8 +100,8 @@ app.get("/api/firms", (req, res) => {
 });
 
 // ---------------- START ----------------
-app.get("/", (req, res) => {
-  res.sendFile(path.join(__dirname, "index.html"));
+app.get("*", (req, res) => {
+  res.sendFile(path.join(__dirname, "dist", "index.html"));
 });
 
 app.listen(PORT, () => {
