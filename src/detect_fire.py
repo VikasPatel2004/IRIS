@@ -3,20 +3,16 @@ import cv2
 import numpy as np
 import requests
 from flask import Flask, Response
+from flask_cors import CORS
 from threading import Thread
+import time
+import os
 from gps_simulator import get_gps
 from alert_system import send_alert
 
-import os
 # ================== CONFIG ==================
-# Use relative paths or env variables for the model
-MODEL_PATH = os.environ.get("MODEL_PATH", "runs/detect/runs/detect/stage4/weights/best.pt")
-
-WEBCAM = 0
+MODEL_PATH = os.environ.get("MODEL_PATH", "yolov8s.pt")
 VIDEO = "simulated_drone_fire_video.mp4"
-# PHONE = "http://10.221.92.234:8080/video"
-
-# ALWAYS USE VIDEO FOR LIVE DEMO ON SERVER
 SOURCE = VIDEO
 
 CONF_THRESH = 0.29
@@ -25,13 +21,13 @@ TEMPORAL_FRAMES = 5
 MIN_SATURATION = 60
 DISPLAY_SCALE = 0.5
 
-# This will be updated via environment variables on the frontend
 DASHBOARD_API = os.environ.get("DASHBOARD_API", "http://localhost:3000/api/local-fires")
-STREAM_PORT = int(os.environ.get("PORT", 5000))
+STREAM_PORT = int(os.environ.get("PORT", 10000))
 # ============================================
 
 app = Flask(__name__)
-# Use CPU for deployment compatibility unless GPU is requested
+CORS(app) # Enable CORS for external access
+
 DEVICE = "cpu"
 model = YOLO(MODEL_PATH)
 cap = cv2.VideoCapture(SOURCE)
@@ -47,6 +43,7 @@ def generate_stream():
     global latest_frame
     while True:
         if latest_frame is None:
+            time.sleep(0.1)
             continue
         _, buffer = cv2.imencode(".jpg", latest_frame)
         frame = buffer.tobytes()
@@ -58,10 +55,13 @@ def video():
     return Response(generate_stream(),
                     mimetype="multipart/x-mixed-replace; boundary=frame")
 
-# Health check for deployment
 @app.route("/health")
 def health():
     return {"status": "ok"}
+
+@app.route("/")
+def index():
+    return "AI Brain is running"
 
 def run_flask():
     app.run(host="0.0.0.0", port=STREAM_PORT, debug=False)
@@ -72,13 +72,14 @@ Thread(target=run_flask, daemon=True).start()
 while True:
     ret, frame = cap.read()
     if not ret:
-        # Loop the video for the demo if it ends
         cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
         continue
 
+    # Small delay to prevent CPU 100% on cloud servers
+    time.sleep(0.01)
+
     results = model(frame, conf=CONF_THRESH, imgsz=640, device=DEVICE)
     fire_detected_this_frame = False
-
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
     best_conf = 0
     best_box = None
@@ -87,35 +88,21 @@ while True:
         for box in r.boxes:
             x1, y1, x2, y2 = map(int, box.xyxy[0])
             conf = float(box.conf[0])
-
-            # ---- AREA FILTER ----
             area = (x2 - x1) * (y2 - y1)
             frame_area = frame.shape[0] * frame.shape[1]
-            if area < MIN_AREA_RATIO * frame_area:
-                continue
-
-            # ---- SATURATION FILTER (reflection killer) ----
+            if area < MIN_AREA_RATIO * frame_area: continue
             roi = hsv[y1:y2, x1:x2]
-            if roi.size == 0:
-                continue
-            if np.mean(roi[:, :, 1]) < MIN_SATURATION:
-                continue
-
+            if roi.size == 0 or np.mean(roi[:, :, 1]) < MIN_SATURATION: continue
             fire_detected_this_frame = True
-
             if conf > best_conf:
                 best_conf = conf
                 best_box = (x1, y1, x2, y2)
 
-    # Draw best detection only
     if best_box:
         x1, y1, x2, y2 = best_box
-        label = f"FIRE {best_conf:.2f}"
         cv2.rectangle(frame, (x1,y1), (x2,y2), (0,0,255), 2)
-        cv2.putText(frame, label, (x1,y1-10),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,0,255), 2)
+        cv2.putText(frame, f"FIRE {best_conf:.2f}", (x1,y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,0,255), 2)
 
-    # ---- TEMPORAL CONFIRMATION ----
     if fire_detected_this_frame:
         fire_counter += 1
     else:
@@ -123,36 +110,18 @@ while True:
         alert_sent = False
 
     if fire_counter >= TEMPORAL_FRAMES:
-        cv2.putText(frame, "🔥 REAL FIRE CONFIRMED", (20,40),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0,0,255), 3)
-
+        cv2.putText(frame, "🔥 REAL FIRE CONFIRMED", (20,40), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0,0,255), 3)
         if not alert_sent:
             lat, lon = get_gps()
-
             send_alert(lat, lon)
-
             try:
-                requests.post(DASHBOARD_API, json={
-                    "lat": lat,
-                    "lon": lon,
-                    "confidence": round(best_conf, 3)
-                })
+                requests.post(DASHBOARD_API, json={"lat": lat, "lon": lon, "confidence": round(best_conf, 3)})
                 print(f"📡 Sent to dashboard: {lat}, {lon}")
             except:
                 print("❌ Dashboard not reachable")
-
             alert_sent = True
 
-    # Half-size display (server-side only)
-    latest_frame = cv2.resize(frame, None,
-                                fx=DISPLAY_SCALE,
-                                fy=DISPLAY_SCALE)
-
-    # REMOVED cv2.imshow for server deployment
-    # cv2.imshow("Fire Detection System", display_frame)
-
-    if cv2.waitKey(1) & 0xFF == ord("q"):
-        break
+    latest_frame = cv2.resize(frame, None, fx=DISPLAY_SCALE, fy=DISPLAY_SCALE)
+    if cv2.waitKey(1) & 0xFF == ord("q"): break
 
 cap.release()
-# cv2.destroyAllWindows()
