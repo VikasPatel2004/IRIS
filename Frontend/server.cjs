@@ -100,7 +100,8 @@ app.get("/api/firms", (req, res) => {
 });
 
 // ---------------- START ----------------
-app.get("/:path*", (req, res) => {
+// Use a native RegEx for Express 5 compatibility to catch all non-API routes
+app.get(/^(?!\/api).+/, (req, res) => {
   res.sendFile(path.join(__dirname, "dist", "index.html"));
 });
 
