@@ -10,8 +10,11 @@ import os
 from gps_simulator import get_gps
 from alert_system import send_alert
 
+import torch
+torch.set_num_threads(1) # CRITICAL: Limit memory overhead on Render
+
 # ================== CONFIG ==================
-MODEL_PATH = os.environ.get("MODEL_PATH", "yolov8s.pt")
+MODEL_PATH = os.environ.get("MODEL_PATH", "yolov8n.pt") # Use 'n' (Nano) for memory efficiency
 VIDEO = "simulated_drone_fire_video.mp4"
 SOURCE = VIDEO
 
